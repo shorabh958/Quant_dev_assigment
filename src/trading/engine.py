@@ -7,6 +7,7 @@ import pandas as pd
 
 from .indicators import add_indicators
 from .metrics import max_drawdown, sharpe_ratio
+from .models import Candle, Fill
 from .portfolio import Portfolio
 from .risk import RiskManager
 from .strategies import GridStrategy
@@ -24,6 +25,7 @@ class EngineResult:
     sharpe: float
     trades: int
     blocked_orders: int
+    equity_curve: list[float]
 
 
 class QuantEngine:
@@ -45,7 +47,7 @@ class QuantEngine:
     def run(
         self,
         data: pd.DataFrame,
-        atr_period=14,
+        atr_period: int = 14,
     ) -> EngineResult:
 
         required = {
@@ -60,8 +62,7 @@ class QuantEngine:
 
         if missing:
             raise ValueError(
-                f"Missing columns: "
-                f"{sorted(missing)}"
+                f"Missing columns: {sorted(missing)}"
             )
 
         frame = add_indicators(
@@ -82,7 +83,8 @@ class QuantEngine:
 
         pending_signal = None
         blocked_orders = 0
-        trade_pnls = []
+        trade_pnls: list[float] = []
+
         equity_curve = [
             float(self.initial_capital)
         ]
@@ -90,10 +92,9 @@ class QuantEngine:
         for i in range(1, len(frame)):
 
             row = frame.iloc[i]
-            price = float(row["open"])
 
             # ------------------------------------------
-            # Execute previous signal
+            # 1. Execute previous-bar signal
             # ------------------------------------------
 
             if pending_signal is not None:
@@ -107,13 +108,15 @@ class QuantEngine:
                 )
 
                 quantity = self.risk.check(
-                    current_position,
-                    pending_signal.quantity,
-                    float(
+                    current_position=current_position,
+                    requested_quantity=(
+                        pending_signal.quantity
+                    ),
+                    daily_pnl=float(
                         portfolio.realized_pnl
                     ),
-                    0.0,
-                    volatility * 100,
+                    drawdown=0.0,
+                    volatility=volatility * 100,
                 )
 
                 if quantity <= 0:
@@ -125,7 +128,7 @@ class QuantEngine:
                     execution_price = (
                         self.costs.execution_price(
                             Decimal(
-                                str(price)
+                                str(row["open"])
                             ),
                             pending_signal.side.value,
                         )
@@ -134,10 +137,6 @@ class QuantEngine:
                     before_realized = (
                         portfolio.realized_pnl
                     )
-
-                    # Apply fill through existing
-                    # portfolio truth.
-                    from .models import Fill
 
                     fill = Fill(
                         order_id=f"ENGINE-{i}",
@@ -164,36 +163,26 @@ class QuantEngine:
                         )
 
             # ------------------------------------------
-            # Generate next order
+            # 2. Build current candle
+            # ------------------------------------------
+
+            candle = Candle(
+                timestamp=frame.index[i],
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                volume=float(row["volume"]),
+            )
+
+            # ------------------------------------------
+            # 3. Generate next signal
             # ------------------------------------------
 
             pending_signal = (
                 self.strategy.generate_signal(
-                    candle=type(
-                        "Candle",
-                        (),
-                        {
-                            "timestamp": frame.index[i],
-                            "open": float(
-                                row["open"]
-                            ),
-                            "high": float(
-                                row["high"]
-                            ),
-                            "low": float(
-                                row["low"]
-                            ),
-                            "close": float(
-                                row["close"]
-                            ),
-                            "volume": float(
-                                row["volume"]
-                            ),
-                        },
-                    )(),
-                    atr_value=float(
-                        row["atr"]
-                    ),
+                    candle=candle,
+                    atr_value=float(row["atr"]),
                     reference_price=reference_price,
                     current_position=(
                         portfolio.position.quantity
@@ -202,34 +191,38 @@ class QuantEngine:
             )
 
             if pending_signal is not None:
-                reference_price = float(
-                    row["close"]
-                )
+                reference_price = candle.close
 
             # ------------------------------------------
-            # Mark-to-market equity
+            # 4. Mark portfolio to market
             # ------------------------------------------
 
-            mark = Decimal(
+            mark_price = Decimal(
                 str(row["close"])
             )
 
             equity = (
                 self.initial_capital
-                + portfolio.total_pnl(mark)
+                + portfolio.total_pnl(mark_price)
             )
 
             equity_curve.append(
                 float(equity)
             )
 
+        # ------------------------------------------
+        # 5. Final mark
+        # ------------------------------------------
+
         final_mark = Decimal(
             str(frame.iloc[-1]["close"])
         )
 
-        realized = portfolio.realized_pnl
+        realized_pnl = (
+            portfolio.realized_pnl
+        )
 
-        unrealized = (
+        unrealized_pnl = (
             portfolio.unrealized_pnl(
                 final_mark
             )
@@ -237,8 +230,8 @@ class QuantEngine:
 
         final_equity = (
             self.initial_capital
-            + realized
-            + unrealized
+            + realized_pnl
+            + unrealized_pnl
         )
 
         total_return = float(
@@ -247,6 +240,10 @@ class QuantEngine:
             - Decimal("1")
         )
 
+        # ------------------------------------------
+        # 6. Performance metrics
+        # ------------------------------------------
+
         returns = (
             pd.Series(equity_curve)
             .pct_change()
@@ -254,18 +251,27 @@ class QuantEngine:
             .tolist()
         )
 
+        drawdown = max_drawdown(
+            equity_curve
+        )
+
+        sharpe = sharpe_ratio(
+            returns
+        )
+
+        # ------------------------------------------
+        # 7. Final result
+        # ------------------------------------------
+
         return EngineResult(
             initial_capital=self.initial_capital,
             final_equity=final_equity,
-            realized_pnl=realized,
-            unrealized_pnl=unrealized,
+            realized_pnl=realized_pnl,
+            unrealized_pnl=unrealized_pnl,
             total_return=total_return,
-            max_drawdown=max_drawdown(
-                equity_curve
-            ),
-            sharpe=sharpe_ratio(
-                returns
-            ),
+            max_drawdown=drawdown,
+            sharpe=sharpe,
             trades=len(trade_pnls),
             blocked_orders=blocked_orders,
+            equity_curve=equity_curve,
         )

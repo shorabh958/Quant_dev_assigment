@@ -75,26 +75,17 @@ walk_forward = run_walk_forward(
 
 
 summary = {
-    "initial_capital": float(
-        result.initial_capital
-    ),
-    "final_equity": float(
-        result.final_equity
-    ),
+    "initial_capital": float(result.initial_capital),
+    "final_equity": float(result.final_equity),
     "total_return": result.total_return,
-    "realized_pnl": float(
-        result.realized_pnl
-    ),
-    "unrealized_pnl": float(
-        result.unrealized_pnl
-    ),
+    "realized_pnl": float(result.realized_pnl),
+    "unrealized_pnl": float(result.unrealized_pnl),
     "max_drawdown": result.max_drawdown,
     "sharpe": result.sharpe,
     "trades": result.trades,
     "blocked_orders": result.blocked_orders,
-    "walk_forward_windows": len(
-        walk_forward
-    ),
+    "equity_curve": result.equity_curve,
+    "walk_forward_windows": len(walk_forward),
     "walk_forward": [
         {
             "window": x.window,
