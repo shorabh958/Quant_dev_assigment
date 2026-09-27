@@ -16,5 +16,8 @@ class RiskManager:
         remaining = self.config.max_position - abs(current_position)
         return max(0, min(requested, remaining))
 
+    def can_pyramid(self, current_position: int) -> bool:
+        return abs(current_position) < self.config.max_pyramids
+
     def kill_switch(self, daily_pnl: float) -> bool:
         return daily_pnl <= -self.config.max_daily_loss

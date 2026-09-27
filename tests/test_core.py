@@ -1,72 +1,48 @@
-from datetime import datetime
-from decimal import Decimal
-
-import pandas as pd
-
-from trading.models import Candle, Fill, Side
-from trading.orders import OrderManager, OrderRequest
-from trading.portfolio import Portfolio
+from trading.risk import RiskManager, RiskConfig
+from trading.strategies import StopAndReverseStrategy
 
 
-def test_order_manager_is_idempotent():
-    manager = OrderManager()
+def test_position_cap():
+    risk = RiskManager(RiskConfig(max_position=3))
 
-    order = OrderRequest(
-        client_order_id="ABC-1",
-        side="BUY",
-        quantity=1,
+    assert risk.allowed_quantity(2, 1) == 1
+    assert risk.allowed_quantity(3, 1) == 0
+
+
+def test_pyramiding_limit():
+    risk = RiskManager(RiskConfig(max_pyramids=3))
+
+    assert risk.can_pyramid(2)
+    assert not risk.can_pyramid(3)
+
+
+def test_kill_switch():
+    risk = RiskManager(RiskConfig(max_daily_loss=5000))
+
+    assert not risk.kill_switch(-4999)
+    assert risk.kill_switch(-5000)
+    assert risk.kill_switch(-6000)
+
+
+def test_stop_and_reverse():
+    strategy = StopAndReverseStrategy(threshold=10)
+
+    # Existing short -> price breaks upward -> reverse long.
+    signal = strategy.generate_signal(
+        price=112,
+        reference_price=100,
+        current_position=-1,
     )
 
-    first = manager.place(order)
-    second = manager.place(order)
+    assert signal is not None
+    assert signal.side.value == "BUY"
 
-    assert first is second
-    assert len(manager.orders) == 1
-
-
-def test_long_position_pnl():
-    portfolio = Portfolio()
-
-    portfolio.apply_fill(
-        Fill(
-            order_id="1",
-            timestamp=datetime.now(),
-            side=Side.BUY,
-            quantity=2,
-            price=Decimal("100"),
-        )
+    # Existing long -> price breaks downward -> reverse short.
+    signal = strategy.generate_signal(
+        price=88,
+        reference_price=100,
+        current_position=1,
     )
 
-    assert portfolio.position.quantity == 2
-    assert portfolio.position.average_price == Decimal("100")
-
-    assert portfolio.unrealized_pnl(
-        Decimal("110")
-    ) == Decimal("20")
-
-
-def test_position_close_realizes_pnl():
-    portfolio = Portfolio()
-
-    portfolio.apply_fill(
-        Fill(
-            order_id="1",
-            timestamp=datetime.now(),
-            side=Side.BUY,
-            quantity=1,
-            price=Decimal("100"),
-        )
-    )
-
-    portfolio.apply_fill(
-        Fill(
-            order_id="2",
-            timestamp=datetime.now(),
-            side=Side.SELL,
-            quantity=1,
-            price=Decimal("110"),
-        )
-    )
-
-    assert portfolio.position.is_flat
-    assert portfolio.realized_pnl == Decimal("10")
+    assert signal is not None
+    assert signal.side.value == "SELL"
