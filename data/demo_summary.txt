@@ -1,0 +1,16 @@
+QUANT ENGINE DEMO REPORT
+
+Initial Capital: 100000
+Final Capital:   100009.13
+Return:          0.01%
+Trades:          0
+Win Rate:        0.00%
+
+Pipeline:
+Market Data
+-> Strategy
+-> Risk
+-> Execution
+-> Portfolio
+-> Metrics
+-> Report

@@ -1,0 +1,10 @@
+{
+  "RECOVERY-1": {
+    "client_id": "RECOVERY-1",
+    "symbol": "NIFTY",
+    "side": "SELL",
+    "quantity": 65,
+    "filled_quantity": 65,
+    "state": "FILLED"
+  }
+}

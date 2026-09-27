@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
-from .models import Candle, Side
+from .models import Side
 
 
 @dataclass
@@ -18,56 +20,103 @@ class GridConfig:
 
 
 class GridStrategy:
-    def __init__(self, config: GridConfig | None = None):
-        self.config = config or GridConfig()
+
+    def __init__(self, config=None):
+        self.config = (
+            config
+            or GridConfig()
+        )
 
     def generate_signal(
         self,
-        candle: Candle,
-        atr_value: float,
-        reference_price: float,
-        current_position: int = 0,
-    ) -> Signal | None:
+        candle,
+        atr_value,
+        reference_price,
+        current_position=0,
+    ):
 
         if atr_value <= 0:
             return None
 
-        spacing = atr_value * self.config.spacing_atr
+        spacing = (
+            atr_value
+            * self.config.spacing_atr
+        )
 
-        if candle.close <= reference_price - spacing:
+        # Do not pyramid beyond configured levels.
+        if (
+            abs(current_position)
+            >= self.config.max_levels
+        ):
+            return None
+
+        if (
+            candle.close
+            <= reference_price - spacing
+        ):
+
             return Signal(
-                side=Side.BUY,
-                reason="grid_lower_level",
-                quantity=self.config.pyramid_quantity,
+                Side.BUY,
+                "grid_lower_level",
+                self.config.pyramid_quantity,
             )
 
-        if candle.close >= reference_price + spacing:
+        if (
+            candle.close
+            >= reference_price + spacing
+        ):
+
             return Signal(
-                side=Side.SELL,
-                reason="grid_upper_level",
-                quantity=self.config.pyramid_quantity,
+                Side.SELL,
+                "grid_upper_level",
+                self.config.pyramid_quantity,
             )
 
         return None
 
 
 class StopAndReverseStrategy:
-    def __init__(self, threshold: float = 0.0):
+
+    def __init__(
+        self,
+        threshold=0.0,
+        quantity=1,
+    ):
+
         self.threshold = threshold
+        self.quantity = quantity
 
     def generate_signal(
         self,
-        price: float,
-        reference_price: float,
-        current_position: int,
-    ) -> Signal | None:
+        price,
+        reference_price,
+        current_position,
+    ):
 
-        if price > reference_price + self.threshold:
-            if current_position <= 0:
-                return Signal(Side.BUY, "stop_and_reverse_long")
+        if (
+            price
+            > reference_price
+            + self.threshold
+            and current_position <= 0
+        ):
 
-        if price < reference_price - self.threshold:
-            if current_position >= 0:
-                return Signal(Side.SELL, "stop_and_reverse_short")
+            return Signal(
+                Side.BUY,
+                "stop_and_reverse_long",
+                self.quantity,
+            )
+
+        if (
+            price
+            < reference_price
+            - self.threshold
+            and current_position >= 0
+        ):
+
+            return Signal(
+                Side.SELL,
+                "stop_and_reverse_short",
+                self.quantity,
+            )
 
         return None
