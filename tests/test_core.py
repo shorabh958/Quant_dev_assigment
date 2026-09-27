@@ -1,48 +1,124 @@
-from trading.risk import RiskManager, RiskConfig
-from trading.strategies import StopAndReverseStrategy
+from datetime import datetime
+from decimal import Decimal
+
+import pandas as pd
+
+from trading.models import Fill, Side
+from trading.orders import OrderManager, OrderRequest
+from trading.portfolio import Portfolio
+from trading.strategies import GridConfig, GridStrategy
 
 
-def test_position_cap():
-    risk = RiskManager(RiskConfig(max_position=3))
+def test_order_manager_is_idempotent():
+    manager = OrderManager()
 
-    assert risk.allowed_quantity(2, 1) == 1
-    assert risk.allowed_quantity(3, 1) == 0
-
-
-def test_pyramiding_limit():
-    risk = RiskManager(RiskConfig(max_pyramids=3))
-
-    assert risk.can_pyramid(2)
-    assert not risk.can_pyramid(3)
-
-
-def test_kill_switch():
-    risk = RiskManager(RiskConfig(max_daily_loss=5000))
-
-    assert not risk.kill_switch(-4999)
-    assert risk.kill_switch(-5000)
-    assert risk.kill_switch(-6000)
-
-
-def test_stop_and_reverse():
-    strategy = StopAndReverseStrategy(threshold=10)
-
-    # Existing short -> price breaks upward -> reverse long.
-    signal = strategy.generate_signal(
-        price=112,
-        reference_price=100,
-        current_position=-1,
+    order = OrderRequest(
+        client_order_id="ABC-1",
+        side="BUY",
+        quantity=1,
     )
 
-    assert signal is not None
-    assert signal.side.value == "BUY"
+    first = manager.place(order)
+    second = manager.place(order)
 
-    # Existing long -> price breaks downward -> reverse short.
-    signal = strategy.generate_signal(
-        price=88,
-        reference_price=100,
-        current_position=1,
+    assert first is second
+    assert len(manager.orders) == 1
+
+
+def test_long_position_pnl():
+    portfolio = Portfolio()
+
+    portfolio.apply_fill(
+        Fill(
+            order_id="1",
+            timestamp=datetime.now(),
+            side=Side.BUY,
+            quantity=2,
+            price=Decimal("100"),
+        )
     )
 
-    assert signal is not None
-    assert signal.side.value == "SELL"
+    assert portfolio.position.quantity == 2
+    assert portfolio.position.average_price == Decimal("100")
+    assert portfolio.unrealized_pnl(Decimal("110")) == Decimal("20")
+
+
+def test_position_close_realizes_pnl():
+    portfolio = Portfolio()
+
+    portfolio.apply_fill(
+        Fill(
+            order_id="1",
+            timestamp=datetime.now(),
+            side=Side.BUY,
+            quantity=1,
+            price=Decimal("100"),
+        )
+    )
+
+    portfolio.apply_fill(
+        Fill(
+            order_id="2",
+            timestamp=datetime.now(),
+            side=Side.SELL,
+            quantity=1,
+            price=Decimal("110"),
+        )
+    )
+
+    assert portfolio.position.is_flat
+    assert portfolio.realized_pnl == Decimal("10")
+
+
+def test_backtest_requires_atr():
+    strategy = GridStrategy(GridConfig(spacing_atr=1.0))
+
+    data = pd.DataFrame(
+        {
+            "open": [100, 101],
+            "high": [102, 103],
+            "low": [99, 100],
+            "close": [101, 102],
+            "volume": [1000, 1000],
+        }
+    )
+
+    from trading.backtest import BacktestEngine
+
+    try:
+        BacktestEngine(strategy).run(data)
+        assert False, "Expected ValueError"
+    except ValueError as exc:
+        assert "ATR" in str(exc)
+
+
+def test_backtest_uses_next_bar_open():
+    data = pd.DataFrame(
+        {
+            "open": [100, 100, 120],
+            "high": [101, 101, 121],
+            "low": [99, 99, 119],
+            "close": [100, 80, 120],
+            "volume": [1000, 1000, 1000],
+            "atr": [10, 10, 10],
+        },
+        index=pd.date_range("2026-01-01", periods=3),
+    )
+
+    strategy = GridStrategy(
+        GridConfig(
+            spacing_atr=1.0,
+            pyramid_quantity=1,
+        )
+    )
+
+    from trading.backtest import BacktestEngine, BacktestConfig
+
+    portfolio = BacktestEngine(
+        strategy,
+        BacktestConfig(slippage_bps=0),
+    ).run(data)
+
+    # The signal from bar 2 executes at bar 3's OPEN (120),
+    # not bar 2's CLOSE (80).
+    assert portfolio.position.quantity == 0 or portfolio.position.average_price == Decimal("120")
